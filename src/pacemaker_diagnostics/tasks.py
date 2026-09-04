@@ -78,12 +78,100 @@ class IpcStateTask(DiagnosticTask):
 
 class ClusterStateTask(DiagnosticTask):
     """Gathers Corosync and Pacemaker cluster stats. (Requires External Tools)"""
+    @staticmethod
+    def _run_ss_snapshot(cmd):
+        try:
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=5.0,
+                check=False,
+                text=True,
+                errors="replace"
+            )
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError):
+            return None
+
+        if proc.returncode != 0:
+            return None
+
+        return proc.stdout if proc.stdout else ""
+
+    @staticmethod
+    def _capture_proc_net_snapshot(ctx: DiagnosticsContext, sub: str, filename: str, proc_files):
+        lines = ["Capture backend: /proc/net fallback", ""]
+        has_data = False
+        for path in proc_files:
+            if not os.path.exists(path):
+                continue
+            try:
+                with open(path, "r", errors="replace") as handle:
+                    has_data = True
+                    lines.append(f"=== {path} ===")
+                    lines.append(handle.read().rstrip())
+                    lines.append("")
+            except OSError as ex:
+                has_data = True
+                lines.append(f"=== {path} ===")
+                lines.append(f"Failed to read: {ex}")
+                lines.append("")
+
+        if has_data:
+            ctx.write_file(sub, filename, "\n".join(lines).rstrip() + "\n")
+            return
+
+        ctx.write_file(sub, filename, "Capture backend: /proc/net fallback\n\nNo /proc/net socket data available.\n")
+
     def run(self, ctx: DiagnosticsContext, scanner: ProcfsScanner):
         sub = "cluster"
         ctx.capture_cmd(sub, "corosync_cfgtool.txt", ["corosync-cfgtool", "-s"])
         ctx.capture_cmd(sub, "corosync_cmapctl.txt", ["corosync-cmapctl"])
-        ctx.capture_cmd(sub, "all_sockets.txt", ["ss", "-anp"])
-        ctx.capture_cmd(sub, "udp_sockets.txt", ["ss", "-anp", "-u"])
+
+        ss_path = shutil.which("ss")
+        if ss_path:
+            ss_output = self._run_ss_snapshot([ss_path, "-anp"])
+            if ss_output is not None:
+                all_sockets_ok = True
+                ctx.write_file(sub, "all_sockets.txt", "Capture backend: ss\n\n" + ss_output)
+
+                udp_lines = []
+                has_udp_rows = False
+                for line in ss_output.splitlines():
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    if stripped.startswith("Netid"):
+                        udp_lines.append(line)
+                        continue
+                    netid = stripped.split(None, 1)[0].lower()
+                    if netid.startswith("udp"):
+                        has_udp_rows = True
+                        udp_lines.append(line)
+
+                if has_udp_rows:
+                    ctx.write_file(sub, "udp_sockets.txt", "Capture backend: ss\n\n" + "\n".join(udp_lines).rstrip() + "\n")
+                    udp_sockets_ok = True
+                else:
+                    udp_sockets_ok = False
+            else:
+                all_sockets_ok = False
+                udp_sockets_ok = False
+        else:
+            all_sockets_ok = False
+            udp_sockets_ok = False
+
+        if not all_sockets_ok:
+            self._capture_proc_net_snapshot(
+                ctx, sub, "all_sockets.txt",
+                ["/proc/net/unix", "/proc/net/tcp", "/proc/net/tcp6", "/proc/net/udp", "/proc/net/udp6", "/proc/net/raw", "/proc/net/raw6"]
+            )
+        if not udp_sockets_ok:
+            self._capture_proc_net_snapshot(
+                ctx, sub, "udp_sockets.txt",
+                ["/proc/net/udp", "/proc/net/udp6"]
+            )
+
         ctx.capture_cmd(sub, "local_cib.xml", ["cibadmin", "-Ql", "-l"])
 
 

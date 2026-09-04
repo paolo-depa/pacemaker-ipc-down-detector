@@ -8,7 +8,7 @@ This utility runs as a highly optimized, zero-dependency Python 3 daemon. Levera
 By default, the tool is heavily locked down to use **Pure Python and ProcFS**. This prevents the overhead of spawning heavyweight child processes (`ls`, `ps`, `ipcs`) during system starvation.
 
 Administrators can strictly toggle specific tasks via CLI arguments to run external tooling explicitly:
-*   `--enable-cluster-state`: Uses `corosync-cfgtool`, `ss`, and `cibadmin`.
+*   `--enable-cluster-state`: Uses `corosync-cfgtool`, `corosync-cmapctl`, and `cibadmin`; socket state is captured via `ss` when available, with a native `/proc/net` fallback.
 *   `--enable-nss-latency`: Uses `getent`.
 *   `--enable-bpf-trace`: Uses `bpftrace`.
 *   `--enable-crm-report`: Uses `crm_report` (spawned asynchronously).
@@ -47,7 +47,7 @@ When an IPC stall is detected, a dedicated, timestamped folder is created under 
 
 ### 6. `cluster/` (Corosync & CIB State)
 *   **`corosync_cfgtool.txt`, `corosync_cmapctl.txt`**: Captures active totem membership rings, consensus configuration states, and network link latency statistics [^9][^39].
-*   **`udp_sockets.txt`, `all_sockets.txt`**: Monitors socket queues to audit for packet fragmentation or dropped buffers on the UDP clustering ports (e.g., 5405) [^38].
+*   **`udp_sockets.txt`, `all_sockets.txt`**: Captures socket state (preferring `ss -anp` when present, otherwise `/proc/net/*`) to audit queue pressure and clustering transport health (e.g., UDP 5405) [^38].
 *   **`local_cib.xml`**: Runs `cibadmin -Ql -l` to capture a raw local configuration snapshot, checking for configuration bloat [^11][^21].
 
 ### 7. `sbd/` (STONITH Block Device Health)

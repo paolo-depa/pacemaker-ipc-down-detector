@@ -62,7 +62,7 @@ def parse_args(args_list=None):
 
     # External tool flags (Disabled by default)
     parser.add_argument("--enable-cluster-state", action="store_true",
-                        help="Enable cluster state task (Requires: corosync-cfgtool, corosync-cmapctl, ss, cibadmin)")
+                        help="Enable cluster state task (Requires: corosync-cfgtool, corosync-cmapctl, cibadmin)")
     parser.add_argument("--enable-nss-latency", action="store_true", help="Enable NSS latency test task (Requires: getent)")
     parser.add_argument("--enable-bpf-trace", action="store_true", help="Enable eBPF kernel tracing task (Requires: bpftrace)")
     parser.add_argument("--enable-crm-report", action="store_true", help="Enable asynchronous crm_report collection (Requires: crm_report)")
