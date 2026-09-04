@@ -8,11 +8,12 @@ This utility runs as a highly optimized, zero-dependency Python 3 daemon. Levera
 By default, the tool is heavily locked down to use **Pure Python and ProcFS**. This prevents the overhead of spawning heavyweight child processes (`ls`, `ps`, `ipcs`) during system starvation.
 
 Administrators can strictly toggle specific tasks via CLI arguments to run external tooling explicitly:
-*   `--enable-cluster-state`: Uses `corosync-cfgtool`, `ss`, and `cibadmin`.
+*   `--enable-cluster-state`: Uses `corosync-cfgtool`, `corosync-cmapctl`, and `cibadmin`; socket state is captured via `ss` when available, with a native `/proc/net` fallback.
 *   `--enable-nss-latency`: Uses `getent`.
 *   `--enable-bpf-trace`: Uses `bpftrace`.
 *   `--enable-crm-report`: Uses `crm_report` (spawned asynchronously).
 *   `--out-dir`: Redirect captures to a customized logging directory (default: `/var/log/pacemaker`).
+*   `--journal-context-lines`: Controls how many recent pacemaker journal lines are persisted per timeout trigger (default: `200`).
 
 ---
 
@@ -20,13 +21,16 @@ Administrators can strictly toggle specific tasks via CLI arguments to run exter
 
 When an IPC stall is detected, a dedicated, timestamped folder is created under `/var/log/pacemaker/push_diag_[daemon]_[timestamp]/` containing categorized diagnostic evidence [^21]:
 
-### 1. `process_trace/` (Process Traces and Thread Stalls)
+### 1. `event_context/` (Timeout Event Journal Context)
+*   **`journal_context.log`**: Persists the matched IPC timeout log line plus an in-memory ring buffer of recent pacemaker journal lines captured immediately before the trigger, without spawning extra commands.
+
+### 2. `process_trace/` (Process Traces and Thread Stalls)
 *   **`user_callstack.txt`**: Captures user-space call-stack parameters using `gstack` or `gdb` with a strict timeout [^21][^33]. Reveals whether the daemon is stuck in a user-space deadlock or GSource main loop block [^7].
 *   **`kernel_callstack.txt`**: Direct dump of `/proc/[PID]/stack` [^33]. Crucial for investigating processes trapped in **uninterruptible sleep (D state)** [^5][^33], showing the exact kernel function (such as `rwsem_down` or page table traversals) holding up the thread [^33].
 *   **`proc_status.txt`, `proc_limits.txt`, `proc_environ.txt`**: Gathers `/proc` filesystem tables to analyze virtual memory allocation, process environment variables, and system limits [^6][^33].
 *   **`open_file_descriptors.txt`**: Complete output of `lsof -p [PID]` to audit for **`EMFILE` (Too many open files - Error 24)** conditions [^6][^33].
 
-### 2. `security_and_monitoring/` (Endpoint Agent Inspection)
+### 3. `security_and_monitoring/` (Endpoint Agent Inspection)
 *   **`agent_audit.txt`**: Audits and snapshots active resource-intensive security, compliance, and monitoring services running on the machine, including:
     *   **Trend Micro Deep Security (`ds_agent`)** [^33]
     *   **CrowdStrike Falcon Sensor (`falcon-sensor`)** [^33]
@@ -34,36 +38,36 @@ When an IPC stall is detected, a dedicated, timestamped folder is created under 
     *   **Qualys, ClamAV (`clamd`), and Auditd** [^33]
     *(Note: The kernel execution stacks and wait channels of all active third-party agents are appended directly into `active_agents.txt` to streamline the review of locked semaphores [^33].)*
 
-### 3. `sap_hana/` (SAP HANA Landscape & Semaphore Audit)
+### 4. `sap_hana/` (SAP HANA Landscape & Semaphore Audit)
 *   **`hana_process_limits.txt`**: Gathers a snapshot of active SAP database components (`hdbnameserver`, `hdbindexserver`, `hdbrsutil`), their memory allocation stats, and their kernel execution stack to identify `mmap_sem` locking [^32].
 
-### 4. `directory_services/` (SSSD & PAM Stalls)
+### 5. `directory_services/` (SSSD & PAM Stalls)
 *   **`lookup_latency.txt`**: Tests Name Service Switch (NSS) lookup latency by querying the `hacluster`, `postgres`, and `root` users with a strict **2-second timeout** [^28][^34]. Stalls indicate network-level LDAP, SSSD, or Active Directory outages that freeze local monitor script authentications [^28][^34].
 *   **`sssd.conf`, `nsswitch.conf`**: Config captures to audit local identity lookup priorities [^28][^35].
 
-### 5. `ipc/` (POSIX Shared Memory Validation)
+### 6. `ipc/` (POSIX Shared Memory Validation)
 *   **`dev_shm_qb_segments.txt`**: Validates file permissions and ownership groups on active `libqb` shared memory files under `/dev/shm/qb-*` [^2]. Checks if files are properly owned by `hacluster:haclient` [^2][^12].
 *   **`posix_shm.txt`, `posix_semaphores.txt`, `posix_summary.txt`**: Runs POSIX IPC audits via `ipcs` to check for active system segment leaks or semaphore allocation blocks [^7].
 
-### 6. `cluster/` (Corosync & CIB State)
+### 7. `cluster/` (Corosync & CIB State)
 *   **`corosync_cfgtool.txt`, `corosync_cmapctl.txt`**: Captures active totem membership rings, consensus configuration states, and network link latency statistics [^9][^39].
-*   **`udp_sockets.txt`, `all_sockets.txt`**: Monitors socket queues to audit for packet fragmentation or dropped buffers on the UDP clustering ports (e.g., 5405) [^38].
+*   **`udp_sockets.txt`, `all_sockets.txt`**: Captures socket state (preferring `ss -anp` when present, otherwise `/proc/net/*`) to audit queue pressure and clustering transport health (e.g., UDP 5405) [^38].
 *   **`local_cib.xml`**: Runs `cibadmin -Ql -l` to capture a raw local configuration snapshot, checking for configuration bloat [^11][^21].
 
-### 7. `sbd/` (STONITH Block Device Health)
+### 8. `sbd/` (STONITH Block Device Health)
 *   **`sbd_config.txt`**: Grabs `/etc/sysconfig/sbd` settings to verify watchdog timeouts, `SBD_DELAY_START`, and cluster shutdown properties [^41][^43].
 *   **`watchdog_info.txt`**: Checks if the hardware watchdog (`/dev/watchdog`) is responsive [^43].
 
-### 8. `system/` (Cgroup and PSI Starvation metrics)
+### 9. `system/` (Cgroup and PSI Starvation metrics)
 *   **`cgroup_cpu_stat.txt`**: Logs systemd cgroup CPU statistics (`cpu.stat`) to identify if container boundaries or CFS quotas have throttled the Pacemaker service [^36][^37].
 *   **`pressure_io.txt`, `pressure_cpu.txt`, `pressure_memory.txt`**: Captures Linux Pressure Stall Information (PSI) to measure host resource starvation preceding the freeze [^5][^33].
 *   **`ps_auxf.txt`**: Captures a visual hierarchical snapshot of all executing system tasks [^31][^33].
 
-### 9. `bpf/` (eBPF Kernel-Level Tracing)
+### 10. `bpf/` (eBPF Kernel-Level Tracing)
 *   **`bpf_lock_latency.txt`**: High-resolution histogram of futex/lock wait latencies and slow system calls in kernel-space, captured using `bpftrace`.
 *   **`bpftrace_missing.txt`**: Created if bpftrace is enabled but the executable is not found on the host.
 
-### 10. Archive
+### 11. Archive
 *   **`crm_report_diagnostics.tar.bz2`**: Broad cluster-wide context perspective generated by spawning `crm_report` spanning the last 5 minutes.
 
 ---

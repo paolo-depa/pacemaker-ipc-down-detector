@@ -15,6 +15,24 @@ class DiagnosticTask:
         raise NotImplementedError()
 
 
+class JournalContextTask(DiagnosticTask):
+    """Persists recent pacemaker journal lines from an in-memory ring buffer."""
+    def __init__(self, timeout_line: str, journal_lines):
+        self.timeout_line = timeout_line
+        self.journal_lines = journal_lines
+
+    def run(self, ctx: DiagnosticsContext, scanner: ProcfsScanner):
+        sub = "event_context"
+        out = [
+            "=== PACEMAKER IPC TIMEOUT JOURNAL CONTEXT ===",
+            f"Trigger line: {self.timeout_line}",
+            f"Buffered line count: {len(self.journal_lines)}",
+            ""
+        ]
+        out.extend(self.journal_lines)
+        ctx.write_file(sub, "journal_context.log", "\n".join(out).rstrip() + "\n")
+
+
 class ProcessTraceTask(DiagnosticTask):
     """Captures kernel call stacks and process states. Pure Python implementation."""
     def run(self, ctx: DiagnosticsContext, scanner: ProcfsScanner):
@@ -78,12 +96,122 @@ class IpcStateTask(DiagnosticTask):
 
 class ClusterStateTask(DiagnosticTask):
     """Gathers Corosync and Pacemaker cluster stats. (Requires External Tools)"""
+    @staticmethod
+    def _run_ss_snapshot(cmd):
+        try:
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=5.0,
+                check=False,
+                text=True,
+                errors="replace"
+            )
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError):
+            return None
+
+        if proc.returncode != 0:
+            return None
+
+        return proc.stdout if proc.stdout else ""
+
+    @staticmethod
+    def _capture_proc_net_snapshot(ctx: DiagnosticsContext, sub: str, filename: str, proc_files):
+        lines = ["Capture backend: /proc/net fallback", ""]
+        has_data = False
+        for path in proc_files:
+            if not os.path.exists(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                    has_data = True
+                    lines.append(f"=== {path} ===")
+                    lines.append(handle.read().rstrip())
+                    lines.append("")
+            except OSError as ex:
+                has_data = True
+                lines.append(f"=== {path} ===")
+                lines.append(f"Failed to read: {ex}")
+                lines.append("")
+
+        if has_data:
+            ctx.write_file(sub, filename, "\n".join(lines).rstrip() + "\n")
+            return
+
+        ctx.write_file(sub, filename, "Capture backend: /proc/net fallback\n\nNo /proc/net socket data available.\n")
+
     def run(self, ctx: DiagnosticsContext, scanner: ProcfsScanner):
         sub = "cluster"
         ctx.capture_cmd(sub, "corosync_cfgtool.txt", ["corosync-cfgtool", "-s"])
         ctx.capture_cmd(sub, "corosync_cmapctl.txt", ["corosync-cmapctl"])
-        ctx.capture_cmd(sub, "all_sockets.txt", ["ss", "-anp"])
-        ctx.capture_cmd(sub, "udp_sockets.txt", ["ss", "-anp", "-u"])
+
+        all_sockets_ok = False
+        udp_sockets_ok = False
+        ss_path = shutil.which("ss")
+        if ss_path:
+            ss_output = self._run_ss_snapshot([ss_path, "-anp"])
+            if ss_output is not None:
+                all_sockets_ok = True
+                all_payload = ss_output.rstrip()
+                if not all_payload:
+                    all_payload = "No socket rows returned by ss."
+                ctx.write_file(sub, "all_sockets.txt", "Capture backend: ss\n\n" + all_payload + "\n")
+
+                udp_header = ""
+                udp_rows = []
+                has_udp_rows = False
+                for line in ss_output.splitlines():
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    if stripped.startswith("Netid"):
+                        udp_header = line
+                        continue
+                    netid = stripped.split(None, 1)[0].lower()
+                    if netid.startswith("udp"):
+                        has_udp_rows = True
+                        udp_rows.append(line)
+
+                if has_udp_rows:
+                    udp_lines = [udp_header] if udp_header else []
+                    udp_lines.extend(udp_rows)
+                    ctx.write_file(sub, "udp_sockets.txt", "Capture backend: ss\n\n" + "\n".join(udp_lines).rstrip() + "\n")
+                    udp_sockets_ok = True
+                else:
+                    ss_udp_output = self._run_ss_snapshot([ss_path, "-anp", "-u"])
+                    if ss_udp_output is not None:
+                        udp_payload = ss_udp_output.rstrip()
+                        has_udp_retry_rows = False
+                        for retry_line in ss_udp_output.splitlines():
+                            retry_stripped = retry_line.strip()
+                            if not retry_stripped or retry_stripped.startswith("Netid"):
+                                continue
+                            retry_netid = retry_stripped.split(None, 1)[0].lower()
+                            if retry_netid.startswith("udp"):
+                                has_udp_retry_rows = True
+                                break
+                        if not has_udp_retry_rows:
+                            if udp_payload:
+                                udp_payload = udp_payload + "\nNo UDP sockets reported by ss."
+                            else:
+                                udp_payload = "No UDP sockets reported by ss."
+                        ctx.write_file(sub, "udp_sockets.txt", "Capture backend: ss\n\n" + udp_payload + "\n")
+                        udp_sockets_ok = True
+                    else:
+                        udp_sockets_ok = False
+
+        if not all_sockets_ok:
+            self._capture_proc_net_snapshot(
+                ctx, sub, "all_sockets.txt",
+                ["/proc/net/unix", "/proc/net/tcp", "/proc/net/tcp6", "/proc/net/udp", "/proc/net/udp6", "/proc/net/raw", "/proc/net/raw6"]
+            )
+        if not udp_sockets_ok:
+            self._capture_proc_net_snapshot(
+                ctx, sub, "udp_sockets.txt",
+                ["/proc/net/udp", "/proc/net/udp6"]
+            )
+
         ctx.capture_cmd(sub, "local_cib.xml", ["cibadmin", "-Ql", "-l"])
 
 

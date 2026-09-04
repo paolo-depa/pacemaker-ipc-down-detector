@@ -6,16 +6,18 @@ from typing import List
 from . import config
 from .utils import DiagnosticsContext, ProcfsScanner
 from .tasks import (
-    DiagnosticTask, ProcessTraceTask, IpcStateTask, ClusterStateTask,
+    DiagnosticTask, JournalContextTask, ProcessTraceTask, IpcStateTask, ClusterStateTask,
     NssLatencyTask, SystemPressureTask, SbdTask, ThirdPartyAuditTask,
     SapHanaAuditTask, BpfTraceTask
 )
 
 class DiagnosticsOrchestrator:
     """Manages the full diagnostic collection pipeline."""
-    def __init__(self, daemon_name: str, pid: str):
+    def __init__(self, daemon_name: str, pid: str, timeout_line: str = "", journal_lines=None):
         self.ctx = DiagnosticsContext(daemon_name, pid)
         self.tasks: List[DiagnosticTask] = []
+        if timeout_line:
+            self.tasks.append(JournalContextTask(timeout_line, journal_lines or []))
 
         # Pure Python Tasks (Enabled by default)
         if not config.DISABLE_PROCESS_TRACE:

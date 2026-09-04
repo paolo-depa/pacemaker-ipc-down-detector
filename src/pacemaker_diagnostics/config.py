@@ -23,6 +23,7 @@ DISABLE_SAP_HANA_AUDIT = False
 
 BPFTRACE_DURATION_SEC = 5
 NSS_LATENCY_THRESHOLD_MS = 100.0
+JOURNAL_CONTEXT_LINES = 200
 
 TIMEOUT_PATTERN = re.compile(
     r"(pacemaker-[a-z]+)\[(\d+)\] is unresponsive to ipc after 1 tries"
@@ -46,7 +47,7 @@ SAP_HANA_PROCESSES = [
 
 def parse_args(args_list=None):
     """Parses CLI arguments and updates the global configuration variables."""
-    global OUT_DIR, LOG_FILE, COOLDOWN_SECONDS, BPFTRACE_DURATION_SEC, NSS_LATENCY_THRESHOLD_MS
+    global OUT_DIR, LOG_FILE, COOLDOWN_SECONDS, BPFTRACE_DURATION_SEC, NSS_LATENCY_THRESHOLD_MS, JOURNAL_CONTEXT_LINES
     global ENABLE_CLUSTER_STATE, ENABLE_NSS_LATENCY, ENABLE_BPF_TRACE, ENABLE_CRM_REPORT
     global DISABLE_PROCESS_TRACE, DISABLE_IPC_STATE, DISABLE_SYSTEM_PRESSURE
     global DISABLE_SBD, DISABLE_THIRD_PARTY_AUDIT, DISABLE_SAP_HANA_AUDIT
@@ -62,7 +63,7 @@ def parse_args(args_list=None):
 
     # External tool flags (Disabled by default)
     parser.add_argument("--enable-cluster-state", action="store_true",
-                        help="Enable cluster state task (Requires: corosync-cfgtool, corosync-cmapctl, ss, cibadmin)")
+                        help="Enable cluster state task (Requires: corosync-cfgtool, corosync-cmapctl, cibadmin)")
     parser.add_argument("--enable-nss-latency", action="store_true", help="Enable NSS latency test task (Requires: getent)")
     parser.add_argument("--enable-bpf-trace", action="store_true", help="Enable eBPF kernel tracing task (Requires: bpftrace)")
     parser.add_argument("--enable-crm-report", action="store_true", help="Enable asynchronous crm_report collection (Requires: crm_report)")
@@ -77,6 +78,10 @@ def parse_args(args_list=None):
 
     parser.add_argument("--bpftrace-duration", type=int, default=BPFTRACE_DURATION_SEC, help="Duration for bpftrace capture in seconds")
     parser.add_argument("--nss-latency-threshold", type=float, default=NSS_LATENCY_THRESHOLD_MS, help="NSS getent latency warning threshold in ms")
+    parser.add_argument(
+        "--journal-context-lines", type=int, default=JOURNAL_CONTEXT_LINES,
+        help="Number of recent pacemaker journal lines to persist per trigger"
+    )
     parser.add_argument("--security-agents", type=str, nargs="*", default=SECURITY_AGENTS, help="List of security agents to monitor")
     parser.add_argument("--monitoring-agents", type=str, nargs="*", default=MONITORING_AGENTS, help="List of monitoring agents to monitor")
     parser.add_argument("--hana-processes", type=str, nargs="*", default=SAP_HANA_PROCESSES, help="List of SAP HANA processes to monitor")
@@ -111,6 +116,7 @@ def parse_args(args_list=None):
 
     BPFTRACE_DURATION_SEC = args.bpftrace_duration
     NSS_LATENCY_THRESHOLD_MS = args.nss_latency_threshold
+    JOURNAL_CONTEXT_LINES = max(0, args.journal_context_lines)
 
     if args.security_agents:
         SECURITY_AGENTS = args.security_agents
