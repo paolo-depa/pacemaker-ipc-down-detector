@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""
+Pacemaker Push-Based Diagnostic Suite Launcher
+"""
+import sys
+import os
+
+# Dynamically add the adjacent 'src' directory to Python's import path.
+# This allows the launcher to resolve the pacemaker_diagnostics package
+# without requiring a global pip installation of the project.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
+
+from pacemaker_diagnostics.daemon import main
+
+if __name__ == "__main__":
+    main()

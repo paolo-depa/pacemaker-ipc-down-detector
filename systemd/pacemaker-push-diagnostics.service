@@ -1,0 +1,23 @@
+[Unit]
+Description=Pacemaker Push-Based Diagnostic Service (Python Implementation v4)
+Documentation=https://clusterlabs.org/pacemaker/doc/
+# Bind directly to pacemaker: if pacemaker stops, this monitoring sidecar stops cleanly
+BindsTo=pacemaker.service
+After=pacemaker.service
+
+[Service]
+Type=simple
+# Path to our optimized Python script
+# You can customize thresholds here by passing CLI arguments:
+# --cooldown 30 --enable-bpftrace --bpftrace-duration 10 --enable-crm-report
+ExecStart=/opt/pacemaker-diagnostics/bin/pacemaker-push-diagnostics
+Restart=always
+RestartSec=5
+# Run as root to allow process-level signal delivery and core/gstack execution
+User=root
+Group=root
+StandardOutput=journal
+StandardError=inherit
+
+[Install]
+WantedBy=multi-user.target

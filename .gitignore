@@ -1,0 +1,42 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Packages
+*.egg
+*.egg-info/
+dist/
+build/
+*.spec
+eggs/
+parts/
+# bin/ is a source directory here, not a build artifact
+!bin/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+
+# Virtual environments
+venv/
+env/
+.env/
+.venv/
+
+# VS Code (ignore local settings but keep launch configs)
+.vscode/*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and diagnostic output dirs
+*.log
+push_diag_*/
+
